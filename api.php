@@ -19,7 +19,7 @@ require_once 'QRCodeGenerator.php';
 define('UPLOAD_DIR', __DIR__ . '/uploads/');
 define('TEMP_DIR', __DIR__ . '/temp/');
 define('FONT_DIR', __DIR__ . '/fonts/');
-define('DEFAULT_FONT', FONT_DIR . 'arial.ttf');
+define('DEFAULT_FONT', FONT_DIR . 'Arial.ttf');
 
 // Create necessary directories
 if (!is_dir(UPLOAD_DIR)) mkdir(UPLOAD_DIR, 0777, true);
@@ -262,7 +262,14 @@ function createStamp($config, $maxWidth, $maxHeight) {
         $showQr = $config['showQr'] ?? false;
         $qrData = $config['qrData'] ?? '';
         
+        // Use canvas measurements if provided (ensures exact match)
+        $canvasMeasurements = $config['canvasMeasurements'] ?? null;
+        
         error_log("Stamp parameters: fontSize={$fontSize}, qrSize={$qrSize}, showQr=" . ($showQr ? 'true' : 'false'));
+        
+        if ($canvasMeasurements) {
+            error_log("Using canvas measurements: " . json_encode($canvasMeasurements));
+        }
     
     // Font file
     $font = DEFAULT_FONT;
@@ -278,23 +285,47 @@ function createStamp($config, $maxWidth, $maxHeight) {
     if ($price) $lines[] = "Price: $price";
     if ($offerText) $lines[] = $offerText;
     
-    // Calculate dimensions
-    $lineHeight = $fontSize + 8;
-    $textWidth = 0;
-    
-    foreach ($lines as $line) {
-        if ($font) {
-            $bbox = imagettfbbox($fontSize, 0, $font, $line);
-            $lineWidth = abs($bbox[4] - $bbox[0]);
-        } else {
-            $lineWidth = strlen($line) * ($fontSize * 0.6);
+    // Use canvas measurements for exact match, or calculate if not available
+    if ($canvasMeasurements && isset($canvasMeasurements['stampWidth'])) {
+        // Use exact dimensions from canvas preview
+        $stampWidth = intval($canvasMeasurements['stampWidth']);
+        $stampHeight = intval($canvasMeasurements['stampHeight']);
+        $textWidth = intval($canvasMeasurements['maxTextWidth']);
+        $lineHeight = intval($canvasMeasurements['lineHeight']);
+        
+        error_log("Using canvas measurements: stampWidth={$stampWidth}, stampHeight={$stampHeight}");
+    } else {
+        // Fallback: calculate dimensions (may not match exactly)
+        $lineHeight = $fontSize + 8;
+        $textWidth = 0;
+        
+        foreach ($lines as $line) {
+            if ($font && file_exists($font)) {
+                // Use TTF font - matches canvas Arial
+                $bbox = imagettfbbox($fontSize, 0, $font, $line);
+                $lineWidth = abs($bbox[4] - $bbox[0]);
+                error_log("TTF text width for '{$line}': {$lineWidth}");
+            } else {
+                // Fallback: estimate based on character count (approximate canvas measurement)
+                // Canvas Arial typically: ~0.5-0.6 * fontSize per character
+                $lineWidth = strlen($line) * ($fontSize * 0.55);
+                error_log("Estimated text width for '{$line}': {$lineWidth}");
+            }
+            $textWidth = max($textWidth, $lineWidth);
         }
-        $textWidth = max($textWidth, $lineWidth);
+        
+        $stampWidth = $textWidth + $padding * 2 + ($showQr ? $qrSize + $padding : 0);
+        $textHeight = count($lines) * $lineHeight;
+        $stampHeight = max($textHeight + $padding * 2, $showQr ? $qrSize + $padding * 2 : 0);
+        
+        error_log("Calculated dimensions: stampWidth={$stampWidth}, stampHeight={$stampHeight}");
     }
     
-    $stampWidth = $textWidth + $padding * 2 + ($showQr ? $qrSize + $padding : 0);
-    $textHeight = count($lines) * $lineHeight;
-    $stampHeight = max($textHeight + $padding * 2, $showQr ? $qrSize + $padding * 2 : 0);
+    error_log("Max text width: {$textWidth}, padding: {$padding}, qrSize: {$qrSize}");
+    
+    error_log("Stamp dimensions: width={$stampWidth}, height={$stampHeight}");
+    error_log("Text area: width={$textWidth}, lineHeight={$lineHeight}");
+    error_log("Lines count: " . count($lines));
     
     // Create stamp image
     $stamp = imagecreatetruecolor($stampWidth, $stampHeight);
@@ -313,10 +344,21 @@ function createStamp($config, $maxWidth, $maxHeight) {
     // Draw text
     $y = $padding + $fontSize;
     foreach ($lines as $line) {
-        if ($font) {
+        if ($font && file_exists($font)) {
+            // Use TTF font - matches canvas
             imagettftext($stamp, $fontSize, 0, $padding, $y, $textColorRgb, $font, $line);
+            error_log("Drew text with TTF: '{$line}' at y={$y}");
         } else {
-            imagestring($stamp, 5, $padding, $y - $fontSize, $line, $textColorRgb);
+            // Fallback: use GD built-in font scaled appropriately
+            // Note: GD built-in fonts are fixed size, so this won't match exactly
+            $gdFont = 5; // Largest built-in font
+            $scale = max(1, round($fontSize / 13)); // Scale factor
+            
+            // Draw text multiple times for "bold" effect at larger sizes
+            for ($i = 0; $i < $scale; $i++) {
+                imagestring($stamp, $gdFont, $padding + $i, $y - 13 + $i, $line, $textColorRgb);
+            }
+            error_log("Drew text with built-in font: '{$line}' at y={$y}");
         }
         $y += $lineHeight;
     }

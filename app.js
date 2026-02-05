@@ -688,6 +688,19 @@ function drawStamp(ctx, canvasWidth, canvasHeight) {
     const stampWidth = maxTextWidth + padding * 2 + (config.showQr ? qrSize + padding : 0);
     const stampHeight = Math.max(textHeight + padding * 2, config.showQr ? qrSize + padding * 2 : 0);
     
+    // Log for debugging
+    console.log('Preview dimensions:', {
+        fontSize,
+        padding,
+        lineHeight,
+        qrSize,
+        maxTextWidth,
+        textHeight,
+        stampWidth,
+        stampHeight,
+        linesCount: lines.length
+    });
+    
     // Calculate position (use custom if set, otherwise use alignment)
     let position;
     if (state.customPosition && state.stampPosition) {
@@ -842,11 +855,16 @@ async function downloadStampedImage() {
         
         showStatus('📤 Uploading image to server...', 'info');
         
+        // Get exact canvas measurements to ensure server matches preview
+        const canvasMeasurements = getCanvasStampMeasurements(config);
+        console.log('Sending canvas measurements to server:', canvasMeasurements);
+        
         const formData = new FormData();
         formData.append('image', state.imageFile);
         formData.append('config', JSON.stringify({
             ...config,
-            qrData: qrData
+            qrData: qrData,
+            canvasMeasurements: canvasMeasurements  // Include exact measurements from preview
         }));
         
         const response = await fetch('api.php?action=stampImage', {
@@ -919,6 +937,52 @@ function buildQRData(config) {
         default:
             return '';
     }
+}
+
+/**
+ * Get exact canvas stamp measurements to match server rendering
+ */
+function getCanvasStampMeasurements(config) {
+    const fontSize = parseInt(config.fontSize);
+    const padding = parseInt(config.padding);
+    const lineHeight = fontSize + 8;
+    const qrSize = config.showQr ? parseInt(config.qrSize || 120) : 0;
+    
+    // Build text lines (same as drawStamp)
+    const lines = [];
+    if (config.brandName) lines.push(config.brandName);
+    if (config.uniqueId) lines.push(`ID: ${config.uniqueId}`);
+    if (config.price) lines.push(`Price: ${config.price}`);
+    if (config.offerText) lines.push(config.offerText);
+    
+    // Create temporary canvas to measure text
+    const tempCanvas = document.createElement('canvas');
+    const ctx = tempCanvas.getContext('2d');
+    ctx.font = `${fontSize}px Arial, sans-serif`;
+    
+    // Measure each line
+    let maxTextWidth = 0;
+    const lineWidths = [];
+    lines.forEach(line => {
+        const metrics = ctx.measureText(line);
+        const width = metrics.width;
+        lineWidths.push(width);
+        maxTextWidth = Math.max(maxTextWidth, width);
+    });
+    
+    const textHeight = lines.length * lineHeight;
+    const stampWidth = maxTextWidth + padding * 2 + (config.showQr ? qrSize + padding : 0);
+    const stampHeight = Math.max(textHeight + padding * 2, config.showQr ? qrSize + padding * 2 : 0);
+    
+    return {
+        maxTextWidth: Math.round(maxTextWidth),
+        lineWidths: lineWidths.map(w => Math.round(w)),
+        textHeight: Math.round(textHeight),
+        stampWidth: Math.round(stampWidth),
+        stampHeight: Math.round(stampHeight),
+        lineHeight,
+        linesCount: lines.length
+    };
 }
 
 /**
